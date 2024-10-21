@@ -26,6 +26,7 @@ on:
     branches:
       - main
       - release-*
+      - main-sharechat
   pull_request:
 jobs:
   test_ci:

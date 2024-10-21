@@ -132,6 +132,14 @@ public class AutoScalerOptions {
                     .withDescription(
                             "The maximum parallelism the autoscaler can use. Note that this limit will be ignored if it is higher than the max parallelism configured in the Flink config or directly on each operator.");
 
+    public static final ConfigOption<Boolean> VERTEX_UNIFORM_PARALLELISM =
+            autoScalerConfig("vertex.uniform-parallelism.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withFallbackKeys(oldOperatorConfigKey("vertex.uniform-parallelism.enabled"))
+                    .withDescription(
+                            "If true, the autoscaler will enforce the same parallelism for all vertices.");
+
     public static final ConfigOption<Double> MAX_SCALE_DOWN_FACTOR =
             autoScalerConfig("scale-down.max-factor")
                     .doubleType()
