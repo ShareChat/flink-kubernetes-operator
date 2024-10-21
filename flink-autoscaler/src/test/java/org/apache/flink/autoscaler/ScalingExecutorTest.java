@@ -759,6 +759,100 @@ public class ScalingExecutorTest {
                                 "8"));
     }
 
+    @Test
+    public void testUniformParallelism() throws Exception {
+        var sourceHexString = "0bfd135746ac8efb3cce668b12e16d3a";
+        var source = JobVertexID.fromHexString(sourceHexString);
+        var filterOperatorHexString = "869fb403873411306404e9f2e4438c0e";
+        var filterOperator = JobVertexID.fromHexString(filterOperatorHexString);
+        var sinkHexString = "a6b7102b8d3e3a9564998c1ffeb5e2b7";
+        var sink = JobVertexID.fromHexString(sinkHexString);
+        conf.set(AutoScalerOptions.VERTEX_UNIFORM_PARALLELISM, true);
+        // set scale down interval to zero so we consider scale downs immediately
+        conf.set(AutoScalerOptions.SCALE_DOWN_INTERVAL, Duration.ZERO);
+        conf.set(AutoScalerOptions.TARGET_UTILIZATION, 1.d);
+        conf.set(AutoScalerOptions.TARGET_UTILIZATION_BOUNDARY, 0.);
+
+        JobTopology jobTopology =
+                new JobTopology(
+                        new VertexInfo(source, Map.of(), 100, MAX_PARALLELISM, false, null),
+                        new VertexInfo(
+                                filterOperator,
+                                Map.of(source, REBALANCE),
+                                25,
+                                MAX_PARALLELISM,
+                                false,
+                                null),
+                        new VertexInfo(
+                                sink,
+                                Map.of(filterOperator, HASH),
+                                50,
+                                MAX_PARALLELISM,
+                                false,
+                                null));
+
+        // The expected new parallelism is 7 without adjustment by max parallelism.
+        var metrics =
+                new EvaluatedMetrics(
+                        Map.of(
+                                source,
+                                evaluated(100, 70, 100),
+                                filterOperator,
+                                evaluated(25, 70, 70),
+                                sink,
+                                evaluated(50, 80, 50)),
+                        dummyGlobalMetrics);
+
+        conf.set(AutoScalerOptions.VERTEX_EXCLUDE_IDS, List.of(sourceHexString, sinkHexString));
+        // we don't expect the scaling to happen because filterOperator must not scale, and others
+        // are ignored
+        scaleAndCheck(jobTopology, metrics, Map.of());
+
+        conf.set(AutoScalerOptions.VERTEX_EXCLUDE_IDS, List.of(sinkHexString));
+        // parallelism is set to be the maximum across 2 vertices
+        scaleAndCheck(
+                jobTopology,
+                metrics,
+                Map.of(
+                        sourceHexString, "70",
+                        filterOperatorHexString, "70"));
+
+        conf.set(AutoScalerOptions.VERTEX_EXCLUDE_IDS, List.of());
+        // parallelism is set to be the maximum across 3 vertices
+        scaleAndCheck(
+                jobTopology,
+                metrics,
+                Map.of(
+                        sourceHexString, "80",
+                        filterOperatorHexString, "80",
+                        sinkHexString, "80"));
+    }
+
+    private void scaleAndCheck(
+            JobTopology jobTopology,
+            EvaluatedMetrics metrics,
+            Map<String, String> expectedParallelismOverrides)
+            throws Exception {
+        var now = Instant.now();
+        var assertion =
+                assertThat(
+                        scalingExecutor.scaleResource(
+                                context,
+                                metrics,
+                                new HashMap<>(),
+                                new ScalingTracking(),
+                                now,
+                                jobTopology,
+                                new DelayedScaleDown()));
+        if (!expectedParallelismOverrides.isEmpty()) {
+            assertion.isTrue();
+            Map<String, String> parallelismOverrides = stateStore.getParallelismOverrides(context);
+            assertThat(parallelismOverrides).containsAllEntriesOf(expectedParallelismOverrides);
+        } else {
+            assertion.isFalse();
+        }
+    }
+
     @ParameterizedTest
     @MethodSource("testDataForQuota")
     public void testQuota(
