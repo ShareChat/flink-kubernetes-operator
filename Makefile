@@ -1,0 +1,52 @@
+###############################################################################
+#  Licensed to the Apache Software Foundation (ASF) under one
+#  or more contributor license agreements.  See the NOTICE file
+#  distributed with this work for additional information
+#  regarding copyright ownership.  The ASF licenses this file
+#  to you under the Apache License, Version 2.0 (the
+#  "License"); you may not use this file except in compliance
+#  with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+# limitations under the License.
+###############################################################################
+
+
+SHELL := /bin/bash
+.SHELLFLAGS := -Eeuoc pipefail
+.ONESHELL:
+
+include Sharechat-Utils.mk
+
+build-docker-latest: \
+  require-var.GITHUB_USER require-var.GITHUB_TOKEN
+	docker build \
+		--tag "flink-kubernetes-operator:latest" \
+		--file ./Dockerfile \
+		.
+
+gcloud-auth-configure-docker:
+	gcloud auth configure-docker --quiet
+
+generate-docker-tag:
+	# We compute docker tag as following: we take git tag if it matches the pattern release-sharechat-*
+    # if suh tag exists, we remove release- prefix and use the rest as the docker tag. If such tag
+    # doesn't exist, we take last git commit hash instead.
+	rm -rf tmp-docker-tag.log
+	(git describe --tag --exact-match --match "release-sharechat-*" 2> /dev/null || git rev-parse HEAD) \
+		| sed 's/^release-//' >> tmp-docker-tag.log
+
+push-docker-gcr.%: build-docker-latest gcloud-auth-configure-docker generate-docker-tag \
+  require-var.DOCKER_REPO_%
+	dockerTag=$$(cat tmp-docker-tag.log)
+	dockerImage=${DOCKER_REPO_$(*)}/flink-kubernetes-operator:$${dockerTag}
+	docker tag flink-kubernetes-operator:latest $${dockerImage}
+	docker push $${dockerImage}
+	echo "Pushed Flink Kubernetes Operator image $$dockerImage"
+
+push-docker-gcr-all: push-docker-gcr.MOJ push-docker-gcr.SC
