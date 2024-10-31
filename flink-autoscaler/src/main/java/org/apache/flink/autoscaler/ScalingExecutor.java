@@ -57,6 +57,7 @@ import static org.apache.flink.autoscaler.event.AutoScalerEventHandler.SCALING_E
 import static org.apache.flink.autoscaler.event.AutoScalerEventHandler.SCALING_SUMMARY_HEADER_SCALING_EXECUTION_DISABLED;
 import static org.apache.flink.autoscaler.event.AutoScalerEventHandler.SCALING_SUMMARY_HEADER_SCALING_EXECUTION_ENABLED;
 import static org.apache.flink.autoscaler.metrics.ScalingHistoryUtils.addToScalingHistoryAndStore;
+import static org.apache.flink.autoscaler.metrics.ScalingMetric.TRUE_PROCESSING_RATE;
 
 /** Class responsible for executing scaling decisions. */
 public class ScalingExecutor<KEY, Context extends JobAutoScalerContext<KEY>> {
@@ -194,6 +195,8 @@ public class ScalingExecutor<KEY, Context extends JobAutoScalerContext<KEY>> {
 
         var excludeVertexIdList =
                 context.getConfiguration().get(AutoScalerOptions.VERTEX_EXCLUDE_IDS);
+        var uniformParallelism =
+                context.getConfiguration().get(AutoScalerOptions.VERTEX_UNIFORM_PARALLELISM);
         AtomicBoolean anyVertexOutsideBound = new AtomicBoolean(false);
         evaluatedMetrics
                 .getVertexMetrics()
@@ -218,6 +221,15 @@ public class ScalingExecutor<KEY, Context extends JobAutoScalerContext<KEY>> {
                                                 restartTime,
                                                 delayedScaleDown);
                                 if (parallelismChange.isNoChange()) {
+                                    if (uniformParallelism) {
+                                        // even if no change for the given vertex, in the case of
+                                        // uniform parallelism, such vertices must participate in
+                                        // the further scaling decision, so we put them to out
+                                        out.put(
+                                                v,
+                                                getNoChangeScalingSummary(
+                                                        metrics, currentParallelism));
+                                    }
                                     return;
                                 }
                                 if (parallelismChange.isOutsideUtilizationBound()) {
@@ -238,7 +250,49 @@ public class ScalingExecutor<KEY, Context extends JobAutoScalerContext<KEY>> {
             return Map.of();
         }
 
-        return out;
+        return uniformParallelism ? enforceUniformParallelism(out) : out;
+    }
+
+    private static ScalingSummary getNoChangeScalingSummary(
+            Map<ScalingMetric, EvaluatedScalingMetric> metrics, int currentParallelism) {
+        // we can't use constructor with parameters here because it checks whether new parallelism
+        // != current parallelism.
+        var noChangeScalingSummary = new ScalingSummary();
+        noChangeScalingSummary.setCurrentParallelism(currentParallelism);
+        noChangeScalingSummary.setNewParallelism(currentParallelism);
+        // EXPECTED_PROCESSING_RATE is expected to be present in a candidate for scaling
+        metrics.put(ScalingMetric.EXPECTED_PROCESSING_RATE, metrics.get(TRUE_PROCESSING_RATE));
+        noChangeScalingSummary.setMetrics(metrics);
+        return noChangeScalingSummary;
+    }
+
+    // Equalize parallelism across all vertices.
+    // The logic is simple: we compute maximum parallelism, and update newParallelism for each
+    // ScalingSummary to this value.
+    // This function doesn't return those vertices that have currentParallelism == computed max
+    // parallelism
+    private Map<JobVertexID, ScalingSummary> enforceUniformParallelism(
+            Map<JobVertexID, ScalingSummary> perVertexSummary) {
+        final var maxParallelism =
+                perVertexSummary.values().stream()
+                        .mapToInt(ScalingSummary::getNewParallelism)
+                        .max();
+        if (maxParallelism.isEmpty()) {
+            return perVertexSummary;
+        }
+        var result = new HashMap<JobVertexID, ScalingSummary>();
+        perVertexSummary.forEach(
+                (v, s) -> {
+                    if (s.getCurrentParallelism() != maxParallelism.getAsInt()) {
+                        result.put(
+                                v,
+                                new ScalingSummary(
+                                        s.getCurrentParallelism(),
+                                        maxParallelism.getAsInt(),
+                                        s.getMetrics()));
+                    }
+                });
+        return result;
     }
 
     private boolean isJobUnderMemoryPressure(
