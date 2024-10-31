@@ -176,6 +176,44 @@ public class ScalingExecutor<KEY, Context extends JobAutoScalerContext<KEY>> {
     }
 
     @VisibleForTesting
+    static boolean allRequiredVerticesWithinUtilizationTarget(
+            Map<JobVertexID, Map<ScalingMetric, EvaluatedScalingMetric>> evaluatedMetrics,
+            Set<JobVertexID> requiredVertices) {
+        // All vertices' ParallelismChange is optional, rescaling will be ignored.
+        if (requiredVertices.isEmpty()) {
+            return true;
+        }
+
+        for (JobVertexID vertex : requiredVertices) {
+            var metrics = evaluatedMetrics.get(vertex);
+
+            double trueProcessingRate = metrics.get(TRUE_PROCESSING_RATE).getAverage();
+            double scaleUpRateThreshold = metrics.get(SCALE_UP_RATE_THRESHOLD).getCurrent();
+            double scaleDownRateThreshold = metrics.get(SCALE_DOWN_RATE_THRESHOLD).getCurrent();
+
+            if (trueProcessingRate < scaleUpRateThreshold
+                    || trueProcessingRate > scaleDownRateThreshold) {
+                LOG.debug(
+                        "Vertex {} processing rate {} is outside ({}, {})",
+                        vertex,
+                        trueProcessingRate,
+                        scaleUpRateThreshold,
+                        scaleDownRateThreshold);
+                return false;
+            } else {
+                LOG.debug(
+                        "Vertex {} processing rate {} is within target ({}, {})",
+                        vertex,
+                        trueProcessingRate,
+                        scaleUpRateThreshold,
+                        scaleDownRateThreshold);
+            }
+        }
+        LOG.info("All vertex processing rates are within target.");
+        return true;
+    }
+
+    @VisibleForTesting
     Map<JobVertexID, ScalingSummary> computeScalingSummary(
             Context context,
             EvaluatedMetrics evaluatedMetrics,
@@ -195,6 +233,8 @@ public class ScalingExecutor<KEY, Context extends JobAutoScalerContext<KEY>> {
         var excludeVertexIdList =
                 context.getConfiguration().get(AutoScalerOptions.VERTEX_EXCLUDE_IDS);
         AtomicBoolean anyVertexOutsideBound = new AtomicBoolean(false);
+        var uniformParallelism =
+                context.getConfiguration().get(AutoScalerOptions.VERTEX_UNIFORM_PARALLELISM);
         evaluatedMetrics
                 .getVertexMetrics()
                 .forEach(
@@ -218,6 +258,15 @@ public class ScalingExecutor<KEY, Context extends JobAutoScalerContext<KEY>> {
                                                 restartTime,
                                                 delayedScaleDown);
                                 if (parallelismChange.isNoChange()) {
+                                      if (uniformParallelism) {
+                                        // even if no change for the given vertex, in the case of
+                                        // uniform parallelism, such vertices must participate in
+                                        // the further scaling decision, so we put them to out
+                                        out.put(
+                                                v,
+                                                getNoChangeScalingSummary(
+                                                        metrics, currentParallelism));
+                                    }
                                     return;
                                 }
                                 if (parallelismChange.isOutsideUtilizationBound()) {
@@ -233,12 +282,55 @@ public class ScalingExecutor<KEY, Context extends JobAutoScalerContext<KEY>> {
                         });
 
         // If the Utilization of all tasks is within range, we can skip scaling.
+        // It means that if only optional tasks are out of scope, we still need to ignore scale.
         if (!anyVertexOutsideBound.get()) {
             LOG.info("All vertex processing rates are within target.");
             return Map.of();
         }
 
-        return out;
+        return uniformParallelism ? enforceUniformParallelism(out) : out;
+    }
+
+    private static ScalingSummary getNoChangeScalingSummary(
+            Map<ScalingMetric, EvaluatedScalingMetric> metrics, int currentParallelism) {
+        // we can't use constructor with parameters here because it checks whether new parallelism
+        // != current parallelism.
+        var noChangeScalingSummary = new ScalingSummary();
+        noChangeScalingSummary.setCurrentParallelism(currentParallelism);
+        noChangeScalingSummary.setNewParallelism(currentParallelism);
+        // EXPECTED_PROCESSING_RATE is expected to be present in a candidate for scaling
+        metrics.put(ScalingMetric.EXPECTED_PROCESSING_RATE, metrics.get(TRUE_PROCESSING_RATE));
+        noChangeScalingSummary.setMetrics(metrics);
+        return noChangeScalingSummary;
+    }
+
+    // Equalize parallelism across all vertices.
+    // The logic is simple: we compute maximum parallelism, and update newParallelism for each
+    // ScalingSummary to this value.
+    // This function doesn't return those vertices that have currentParallelism == computed max
+    // parallelism
+    private Map<JobVertexID, ScalingSummary> enforceUniformParallelism(
+            Map<JobVertexID, ScalingSummary> perVertexSummary) {
+        final var maxParallelism =
+                perVertexSummary.values().stream()
+                        .mapToInt(ScalingSummary::getNewParallelism)
+                        .max();
+        if (maxParallelism.isEmpty()) {
+            return perVertexSummary;
+        }
+        var result = new HashMap<JobVertexID, ScalingSummary>();
+        perVertexSummary.forEach(
+                (v, s) -> {
+                    if (s.getCurrentParallelism() != maxParallelism.getAsInt()) {
+                        result.put(
+                                v,
+                                new ScalingSummary(
+                                        s.getCurrentParallelism(),
+                                        maxParallelism.getAsInt(),
+                                        s.getMetrics()));
+                    }
+                });
+        return result;
     }
 
     private boolean isJobUnderMemoryPressure(
