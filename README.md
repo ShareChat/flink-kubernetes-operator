@@ -47,3 +47,15 @@ You can learn more about how to contribute in the [Apache Flink website](https:/
 ## License
 
 The code in this repository is licensed under the [Apache Software License 2](LICENSE).
+
+## ShareChat's fork
+
+We maintain our own fork of [Flink Kubernetes Operator](https://github.com/apache/flink-kubernetes-operator) according to the following rules:
+- ShareChat's main branch is main-sharechat
+- When proposing changes, we create branch from main-sharechat and make pull request with the base = main-sharechat
+- All pull request must have [ShareChat] prefix in the title so it gets passed to the corresponding commit in the main-sharechat branch
+- When new release of upstream Flink Kubernetes Operator is released, we create branch with the name release-sharechat-xxx starting from the corresponding release-xxx of the upstream operator
+- Once branch is created, we cherry-pick all the commits marked as [ShareChat] from main-sharechat
+- After that, we tag the last commit in the release branch by release-sharechat-xxx tag
+
+After that, to push the image to GCR, [this](https://teamcity.staging.sharechat.com/buildConfiguration/AiOrgProjects_FlinkKubernetesOperator_PushFlinkKubernetesOperatorImage?mode=builds) TeamCity build config should be used. 
