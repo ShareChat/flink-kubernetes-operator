@@ -58,4 +58,4 @@ We maintain our own fork of [Flink Kubernetes Operator](https://github.com/apach
 - Once branch is created, we cherry-pick all the commits marked as [ShareChat] from main-sharechat
 - After that, we tag the last commit in the release branch by release-sharechat-xxx tag
 
-After that, to push the image to GCR, [this](https://teamcity.staging.sharechat.com/buildConfiguration/AiOrgProjects_FlinkKubernetesOperator_PushFlinkKubernetesOperatorImage?mode=builds) TeamCity build config should be used. 
+After that, to push the image to Armory, [this](https://teamcity.staging.sharechat.com/buildConfiguration/AiOrgProjects_FlinkKubernetesOperator_PushFlinkKubernetesOperatorImage?mode=builds) TeamCity build config should be used. 
