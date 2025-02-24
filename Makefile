@@ -40,6 +40,7 @@ generate-docker-tag:
 push-docker: build-docker-latest require-var.ARMORY_USERNAME require-var.ARMORY_PASSWORD
 	@ for repo in $(ArmoryRepos); do \
 	  echo -n "$${ARMORY_PASSWORD}" | docker login --username "$${ARMORY_USERNAME}" --password-stdin $$repo ;\
+	  dockerTag=$$(cat tmp-docker-tag.log)
 	  dockerImage=$$repo/$(DockerImageName):$${dockerTag}
 	  docker tag $(DockerImageName):latest $${dockerImage} ;\
 	  docker push $${dockerImage} ;\
