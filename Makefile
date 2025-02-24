@@ -37,7 +37,8 @@ generate-docker-tag:
 	(git describe --tag --exact-match --match "release-sharechat-*" 2> /dev/null || git rev-parse HEAD) \
 		| sed 's/^release-//' >> tmp-docker-tag.log
 
-push-docker: build-docker-latest require-var.ARMORY_USERNAME require-var.ARMORY_PASSWORD
+push-docker: build-docker-latest generate-docker-tag \
+  require-var.ARMORY_USERNAME require-var.ARMORY_PASSWORD
 	@ for repo in $(ArmoryRepos); do \
 	  echo -n "$${ARMORY_PASSWORD}" | docker login --username "$${ARMORY_USERNAME}" --password-stdin $$repo ;\
 	  dockerTag=$$(cat tmp-docker-tag.log)
