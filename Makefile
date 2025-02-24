@@ -23,15 +23,11 @@ SHELL := /bin/bash
 
 include Sharechat-Utils.mk
 
-build-docker-latest: \
-  require-var.GITHUB_USER require-var.GITHUB_TOKEN
-	docker build \
-		--tag "flink-kubernetes-operator:latest" \
-		--file ./Dockerfile \
-		.
+DockerImageName := flink/flink-kubernetes-operator
+ArmoryRepos := mum-armory.platform.internal/ai-infra sgp-armory.platform.internal/ai-infra
 
-gcloud-auth-configure-docker:
-	gcloud auth configure-docker --quiet
+build-docker-latest:
+	docker build . --tag $(DockerImageName):latest
 
 generate-docker-tag:
 	# We compute docker tag as following: we take git tag if it matches the pattern release-sharechat-*
@@ -41,12 +37,14 @@ generate-docker-tag:
 	(git describe --tag --exact-match --match "release-sharechat-*" 2> /dev/null || git rev-parse HEAD) \
 		| sed 's/^release-//' >> tmp-docker-tag.log
 
-push-docker-gcr.%: build-docker-latest gcloud-auth-configure-docker generate-docker-tag \
-  require-var.DOCKER_REPO_%
-	dockerTag=$$(cat tmp-docker-tag.log)
-	dockerImage=${DOCKER_REPO_$(*)}/flink-kubernetes-operator:$${dockerTag}
-	docker tag flink-kubernetes-operator:latest $${dockerImage}
-	docker push $${dockerImage}
-	echo "Pushed Flink Kubernetes Operator image $$dockerImage"
-
-push-docker-gcr-all: push-docker-gcr.MOJ push-docker-gcr.SC
+push-docker: build-docker-latest generate-docker-tag \
+  require-var.ARMORY_USERNAME require-var.ARMORY_PASSWORD
+	@ for repo in $(ArmoryRepos); do \
+	  echo -n "$${ARMORY_PASSWORD}" | docker login --username "$${ARMORY_USERNAME}" --password-stdin $$repo ;\
+	  dockerTag=$$(cat tmp-docker-tag.log)
+	  dockerImage=$$repo/$(DockerImageName):$${dockerTag}
+	  docker tag $(DockerImageName):latest $${dockerImage} ;\
+	  docker push $${dockerImage} ;\
+	  echo "Pushed Flink Kubernetes Operator image $$dockerImage"
+	  docker logout $$repo ;\
+	done
