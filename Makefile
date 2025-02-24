@@ -23,7 +23,7 @@ SHELL := /bin/bash
 
 include Sharechat-Utils.mk
 
-DockerImageName := flink-kubernetes-operator
+DockerImageName := flink/flink-kubernetes-operator
 ArmoryRepos := mum-armory.platform.internal/ai-infra sgp-armory.platform.internal/ai-infra
 
 build-docker-latest:
