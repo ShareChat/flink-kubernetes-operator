@@ -211,6 +211,19 @@ public class ReconciliationUtils {
         reconciliationStatus.setReconciliationTimestamp(System.currentTimeMillis());
     }
 
+    public static <SPEC extends AbstractFlinkSpec> void updateLastReconciledAutoscalerResetNonce(
+            AbstractFlinkResource<SPEC, ?> target) {
+        var spec = target.getSpec();
+        var reconciliationStatus = target.getStatus().getReconciliationStatus();
+        var lastReconciledSpec = reconciliationStatus.deserializeLastReconciledSpec();
+
+        lastReconciledSpec
+                .getJob()
+                .setAutoscalerResetNonce(spec.getJob().getAutoscalerResetNonce());
+        reconciliationStatus.serializeAndSetLastReconciledSpec(lastReconciledSpec, target);
+        reconciliationStatus.setReconciliationTimestamp(System.currentTimeMillis());
+    }
+
     private static void updateLastReconciledJobSpec(
             JobSpec lastReconciledJobSpec, JobSpec jobSpec, SnapshotType snapshotType) {
         switch (snapshotType) {
@@ -364,10 +377,6 @@ public class ReconciliationUtils {
 
     public static boolean isJobCancelled(CommonStatus<?> status) {
         return CANCELED == status.getJobStatus().getState();
-    }
-
-    public static boolean isJobCancellable(CommonStatus<?> status) {
-        return RECONCILING != status.getJobStatus().getState();
     }
 
     public static boolean isJobCancelling(CommonStatus<?> status) {
@@ -545,11 +554,6 @@ public class ReconciliationUtils {
         var reconciliationStatus = resource.getStatus().getReconciliationStatus();
         var lastSpecWithMeta = reconciliationStatus.deserializeLastReconciledSpecWithMeta();
         var newMeta = ReconciliationMetadata.from(resource);
-
-        if (newMeta.equals(lastSpecWithMeta.getMeta())) {
-            // Nothing to update
-            return;
-        }
 
         reconciliationStatus.setLastReconciledSpec(
                 SpecUtils.writeSpecWithMeta(lastSpecWithMeta.getSpec(), newMeta));

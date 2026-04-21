@@ -17,17 +17,18 @@
 
 package org.apache.flink.autoscaler.topology;
 
+import org.apache.flink.autoscaler.exceptions.NotReadyException;
 import org.apache.flink.runtime.instance.SlotSharingGroupId;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 
-import org.apache.flink.shaded.guava31.com.google.common.collect.ImmutableMap;
-import org.apache.flink.shaded.guava31.com.google.common.collect.ImmutableSet;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.core.JsonProcessingException;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.node.ArrayNode;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode;
 
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.ToString;
@@ -149,6 +150,10 @@ public class JobTopology {
             throws JsonProcessingException {
         ObjectNode plan = objectMapper.readValue(jsonPlan, ObjectNode.class);
         ArrayNode nodes = (ArrayNode) plan.get("nodes");
+
+        if (nodes == null || nodes.isEmpty()) {
+            throw new NotReadyException("No nodes found in the plan, job is not ready yet");
+        }
 
         var vertexInfo = new HashSet<VertexInfo>();
 

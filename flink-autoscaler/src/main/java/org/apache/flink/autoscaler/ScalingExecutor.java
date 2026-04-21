@@ -41,17 +41,15 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.Set;
 import java.util.SortedMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-import static org.apache.flink.autoscaler.JobVertexScaler.ParallelismChangeType.NO_CHANGE;
-import static org.apache.flink.autoscaler.JobVertexScaler.ParallelismChangeType.REQUIRED_CHANGE;
 import static org.apache.flink.autoscaler.config.AutoScalerOptions.EXCLUDED_PERIODS;
 import static org.apache.flink.autoscaler.config.AutoScalerOptions.SCALING_ENABLED;
 import static org.apache.flink.autoscaler.config.AutoScalerOptions.SCALING_EVENT_INTERVAL;
@@ -59,8 +57,6 @@ import static org.apache.flink.autoscaler.event.AutoScalerEventHandler.SCALING_E
 import static org.apache.flink.autoscaler.event.AutoScalerEventHandler.SCALING_SUMMARY_HEADER_SCALING_EXECUTION_DISABLED;
 import static org.apache.flink.autoscaler.event.AutoScalerEventHandler.SCALING_SUMMARY_HEADER_SCALING_EXECUTION_ENABLED;
 import static org.apache.flink.autoscaler.metrics.ScalingHistoryUtils.addToScalingHistoryAndStore;
-import static org.apache.flink.autoscaler.metrics.ScalingMetric.SCALE_DOWN_RATE_THRESHOLD;
-import static org.apache.flink.autoscaler.metrics.ScalingMetric.SCALE_UP_RATE_THRESHOLD;
 import static org.apache.flink.autoscaler.metrics.ScalingMetric.TRUE_PROCESSING_RATE;
 
 /** Class responsible for executing scaling decisions. */
@@ -181,44 +177,6 @@ public class ScalingExecutor<KEY, Context extends JobAutoScalerContext<KEY>> {
     }
 
     @VisibleForTesting
-    static boolean allRequiredVerticesWithinUtilizationTarget(
-            Map<JobVertexID, Map<ScalingMetric, EvaluatedScalingMetric>> evaluatedMetrics,
-            Set<JobVertexID> requiredVertices) {
-        // All vertices' ParallelismChange is optional, rescaling will be ignored.
-        if (requiredVertices.isEmpty()) {
-            return true;
-        }
-
-        for (JobVertexID vertex : requiredVertices) {
-            var metrics = evaluatedMetrics.get(vertex);
-
-            double trueProcessingRate = metrics.get(TRUE_PROCESSING_RATE).getAverage();
-            double scaleUpRateThreshold = metrics.get(SCALE_UP_RATE_THRESHOLD).getCurrent();
-            double scaleDownRateThreshold = metrics.get(SCALE_DOWN_RATE_THRESHOLD).getCurrent();
-
-            if (trueProcessingRate < scaleUpRateThreshold
-                    || trueProcessingRate > scaleDownRateThreshold) {
-                LOG.debug(
-                        "Vertex {} processing rate {} is outside ({}, {})",
-                        vertex,
-                        trueProcessingRate,
-                        scaleUpRateThreshold,
-                        scaleDownRateThreshold);
-                return false;
-            } else {
-                LOG.debug(
-                        "Vertex {} processing rate {} is within target ({}, {})",
-                        vertex,
-                        trueProcessingRate,
-                        scaleUpRateThreshold,
-                        scaleDownRateThreshold);
-            }
-        }
-        LOG.info("All vertex processing rates are within target.");
-        return true;
-    }
-
-    @VisibleForTesting
     Map<JobVertexID, ScalingSummary> computeScalingSummary(
             Context context,
             EvaluatedMetrics evaluatedMetrics,
@@ -234,12 +192,12 @@ public class ScalingExecutor<KEY, Context extends JobAutoScalerContext<KEY>> {
         }
 
         var out = new HashMap<JobVertexID, ScalingSummary>();
-        var requiredVertices = new HashSet<JobVertexID>();
 
         var excludeVertexIdList =
                 context.getConfiguration().get(AutoScalerOptions.VERTEX_EXCLUDE_IDS);
         var uniformParallelism =
                 context.getConfiguration().get(AutoScalerOptions.VERTEX_UNIFORM_PARALLELISM);
+        AtomicBoolean anyVertexOutsideBound = new AtomicBoolean(false);
         evaluatedMetrics
                 .getVertexMetrics()
                 .forEach(
@@ -262,7 +220,7 @@ public class ScalingExecutor<KEY, Context extends JobAutoScalerContext<KEY>> {
                                                         v, Collections.emptySortedMap()),
                                                 restartTime,
                                                 delayedScaleDown);
-                                if (NO_CHANGE == parallelismChange.getChangeType()) {
+                                if (parallelismChange.isNoChange()) {
                                     if (uniformParallelism) {
                                         // even if no change for the given vertex, in the case of
                                         // uniform parallelism, such vertices must participate in
@@ -273,8 +231,9 @@ public class ScalingExecutor<KEY, Context extends JobAutoScalerContext<KEY>> {
                                                         metrics, currentParallelism));
                                     }
                                     return;
-                                } else if (REQUIRED_CHANGE == parallelismChange.getChangeType()) {
-                                    requiredVertices.add(v);
+                                }
+                                if (parallelismChange.isOutsideUtilizationBound()) {
+                                    anyVertexOutsideBound.set(true);
                                 }
                                 out.put(
                                         v,
@@ -285,10 +244,9 @@ public class ScalingExecutor<KEY, Context extends JobAutoScalerContext<KEY>> {
                             }
                         });
 
-        // If the Utilization of all required tasks is within range, we can skip scaling.
-        // It means that if only optional tasks are out of scope, we still need to ignore scale.
-        if (allRequiredVerticesWithinUtilizationTarget(
-                evaluatedMetrics.getVertexMetrics(), requiredVertices)) {
+        // If the Utilization of all tasks is within range, we can skip scaling.
+        if (!anyVertexOutsideBound.get()) {
+            LOG.info("All vertex processing rates are within target.");
             return Map.of();
         }
 
@@ -553,5 +511,10 @@ public class ScalingExecutor<KEY, Context extends JobAutoScalerContext<KEY>> {
                 context, scalingSummaries, message, conf.get(SCALING_EVENT_INTERVAL));
 
         return !scaleEnabled || isExcluded;
+    }
+
+    @VisibleForTesting
+    void setClock(Clock clock) {
+        jobVertexScaler.setClock(clock);
     }
 }

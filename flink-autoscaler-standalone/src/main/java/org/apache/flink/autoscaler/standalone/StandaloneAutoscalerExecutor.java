@@ -21,39 +21,43 @@ import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.autoscaler.JobAutoScaler;
 import org.apache.flink.autoscaler.JobAutoScalerContext;
 import org.apache.flink.autoscaler.event.AutoScalerEventHandler;
+import org.apache.flink.autoscaler.validation.AutoscalerValidator;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.UnmodifiableConfiguration;
 import org.apache.flink.util.concurrent.ExecutorThreadFactory;
 
-import org.apache.flink.shaded.guava31.com.google.common.util.concurrent.ThreadFactoryBuilder;
-
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
 import javax.annotation.Nonnull;
 
-import java.io.Closeable;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import static org.apache.flink.autoscaler.config.AutoScalerOptions.SCALING_EVENT_INTERVAL;
 import static org.apache.flink.autoscaler.standalone.config.AutoscalerStandaloneOptions.CONTROL_LOOP_INTERVAL;
 import static org.apache.flink.autoscaler.standalone.config.AutoscalerStandaloneOptions.CONTROL_LOOP_PARALLELISM;
 
 /** The executor of the standalone autoscaler. */
 public class StandaloneAutoscalerExecutor<KEY, Context extends JobAutoScalerContext<KEY>>
-        implements Closeable {
+        implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(StandaloneAutoscalerExecutor.class);
 
@@ -66,6 +70,7 @@ public class StandaloneAutoscalerExecutor<KEY, Context extends JobAutoScalerCont
     private final ScheduledExecutorService scheduledExecutorService;
     private final ExecutorService scalingThreadPool;
     private final UnmodifiableConfiguration baseConf;
+    private final AutoscalerValidator autoscalerValidator;
 
     /**
      * Maintain a set of job keys that during scaling, it should be accessed at {@link
@@ -74,10 +79,10 @@ public class StandaloneAutoscalerExecutor<KEY, Context extends JobAutoScalerCont
     private final Set<KEY> scalingJobKeys;
 
     /**
-     * Maintain a set of scaling job keys for the last control loop, it should be accessed at {@link
+     * Maintain a map of scaling job keys for the last control loop, it should be accessed at {@link
      * #scheduledExecutorService} thread.
      */
-    private Set<KEY> lastScalingKeys;
+    private Map<KEY, Context> lastScaling;
 
     public StandaloneAutoscalerExecutor(
             @Nonnull Configuration conf,
@@ -101,6 +106,7 @@ public class StandaloneAutoscalerExecutor<KEY, Context extends JobAutoScalerCont
                         parallelism, new ExecutorThreadFactory("autoscaler-standalone-scaling"));
         this.scalingJobKeys = new HashSet<>();
         this.baseConf = new UnmodifiableConfiguration(conf);
+        this.autoscalerValidator = new AutoscalerValidator();
     }
 
     public void start() {
@@ -110,7 +116,7 @@ public class StandaloneAutoscalerExecutor<KEY, Context extends JobAutoScalerCont
     }
 
     @Override
-    public void close() {
+    public void close() throws Exception {
         scheduledExecutorService.shutdownNow();
         scalingThreadPool.shutdownNow();
         eventHandler.close();
@@ -151,12 +157,12 @@ public class StandaloneAutoscalerExecutor<KEY, Context extends JobAutoScalerCont
                                                     throwable);
                                         }
                                         scalingJobKeys.remove(jobKey);
-                                        if (!lastScalingKeys.contains(jobKey)) {
+                                        if (!lastScaling.containsKey(jobKey)) {
                                             // Current job has been stopped. lastScalingKeys doesn't
                                             // contain jobKey means current job key was scaled in a
                                             // previous control loop, and current job is stopped in
                                             // the latest control loop.
-                                            autoScaler.cleanup(jobKey);
+                                            autoScaler.cleanup(jobContext);
                                         }
                                     },
                                     scheduledExecutorService));
@@ -165,25 +171,40 @@ public class StandaloneAutoscalerExecutor<KEY, Context extends JobAutoScalerCont
     }
 
     private void cleanupStoppedJob(Collection<Context> jobList) {
-        var currentScalingKeys =
-                jobList.stream().map(JobAutoScalerContext::getJobKey).collect(Collectors.toSet());
-        if (lastScalingKeys != null) {
-            lastScalingKeys.removeAll(currentScalingKeys);
-            for (KEY jobKey : lastScalingKeys) {
+        var jobs =
+                jobList.stream()
+                        .collect(
+                                Collectors.toMap(
+                                        JobAutoScalerContext::getJobKey, Function.identity()));
+        if (lastScaling != null) {
+            jobs.keySet().forEach(lastScaling::remove);
+            for (Map.Entry<KEY, Context> job : lastScaling.entrySet()) {
                 // Current job may be scaling, and cleanup should happen after scaling.
-                if (!scalingJobKeys.contains(jobKey)) {
-                    autoScaler.cleanup(jobKey);
+                if (!scalingJobKeys.contains(job.getKey())) {
+                    autoScaler.cleanup(job.getValue());
                 }
             }
         }
-        lastScalingKeys = currentScalingKeys;
+        lastScaling = new ConcurrentHashMap<>(jobs);
     }
 
     @VisibleForTesting
     protected void scalingSingleJob(Context jobContext) {
         try {
             MDC.put("job.key", jobContext.getJobKey().toString());
-            autoScaler.scale(jobContext);
+            Optional<String> validationError =
+                    autoscalerValidator.validateAutoscalerOptions(jobContext.getConfiguration());
+            if (validationError.isPresent()) {
+                eventHandler.handleEvent(
+                        jobContext,
+                        AutoScalerEventHandler.Type.Warning,
+                        "AutoScaler Options Validation",
+                        validationError.get(),
+                        null,
+                        baseConf.get(SCALING_EVENT_INTERVAL));
+            } else {
+                autoScaler.scale(jobContext);
+            }
         } catch (Throwable e) {
             LOG.error("Error while scaling job", e);
             eventHandler.handleException(jobContext, AUTOSCALER_ERROR, e);

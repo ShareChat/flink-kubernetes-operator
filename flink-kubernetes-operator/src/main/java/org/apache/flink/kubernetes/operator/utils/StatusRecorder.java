@@ -20,12 +20,14 @@ package org.apache.flink.kubernetes.operator.utils;
 
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.kubernetes.operator.api.AbstractFlinkResource;
+import org.apache.flink.kubernetes.operator.api.FlinkBlueGreenDeployment;
 import org.apache.flink.kubernetes.operator.api.FlinkDeployment;
 import org.apache.flink.kubernetes.operator.api.FlinkSessionJob;
 import org.apache.flink.kubernetes.operator.api.FlinkStateSnapshot;
 import org.apache.flink.kubernetes.operator.api.lifecycle.ResourceLifecycleState;
 import org.apache.flink.kubernetes.operator.api.listener.FlinkResourceListener;
 import org.apache.flink.kubernetes.operator.api.status.CommonStatus;
+import org.apache.flink.kubernetes.operator.api.status.FlinkBlueGreenDeploymentStatus;
 import org.apache.flink.kubernetes.operator.api.status.FlinkDeploymentStatus;
 import org.apache.flink.kubernetes.operator.api.status.FlinkSessionJobStatus;
 import org.apache.flink.kubernetes.operator.api.status.FlinkStateSnapshotStatus;
@@ -85,6 +87,7 @@ public class StatusRecorder<CR extends CustomResource<?, STATUS>, STATUS> {
      * operator behavior.
      *
      * @param resource Resource for which status update should be performed
+     * @param client Kubernetes client to use for the update
      */
     @SneakyThrows
     public void patchAndCacheStatus(CR resource, KubernetesClient client) {
@@ -98,19 +101,7 @@ public class StatusRecorder<CR extends CustomResource<?, STATUS>, STATUS> {
             return;
         }
 
-        Class<?> statusClass;
-        if (resource instanceof FlinkDeployment) {
-            statusClass = FlinkDeploymentStatus.class;
-        } else if (resource instanceof FlinkSessionJob) {
-            statusClass = FlinkSessionJobStatus.class;
-        } else if (resource instanceof FlinkStateSnapshot) {
-            statusClass = FlinkStateSnapshotStatus.class;
-        } else {
-            throw new RuntimeException(
-                    String.format("Resource is unknown class: %s", resource.getClass()));
-        }
-
-        var prevStatus = (STATUS) objectMapper.convertValue(previousStatusNode, statusClass);
+        var prevStatus = convertPreviousStatus(resource, previousStatusNode);
 
         Exception err = null;
         for (int i = 0; i < 3; i++) {
@@ -132,6 +123,23 @@ public class StatusRecorder<CR extends CustomResource<?, STATUS>, STATUS> {
         statusCache.put(resourceId, newStatusNode);
         statusUpdateListener.accept(resource, prevStatus);
         metricManager.onUpdate(resource);
+    }
+
+    private STATUS convertPreviousStatus(CR resource, ObjectNode previousStatusNode) {
+        Class<?> statusClass;
+        if (resource instanceof FlinkDeployment) {
+            statusClass = FlinkDeploymentStatus.class;
+        } else if (resource instanceof FlinkSessionJob) {
+            statusClass = FlinkSessionJobStatus.class;
+        } else if (resource instanceof FlinkStateSnapshot) {
+            statusClass = FlinkStateSnapshotStatus.class;
+        } else if (resource instanceof FlinkBlueGreenDeployment) {
+            statusClass = FlinkBlueGreenDeploymentStatus.class;
+        } else {
+            throw new RuntimeException(
+                    String.format("Resource is unknown class: %s", resource.getClass()));
+        }
+        return (STATUS) objectMapper.convertValue(previousStatusNode, statusClass);
     }
 
     private void replaceStatus(CR resource, STATUS prevStatus, KubernetesClient client)
@@ -240,13 +248,15 @@ public class StatusRecorder<CR extends CustomResource<?, STATUS>, STATUS> {
     }
 
     /**
-     * Remove cached status for Flink resource.
+     * Clean up resource after deletion and send a last status update.
      *
      * @param resource Flink resource.
      */
-    public void removeCachedStatus(CR resource) {
-        statusCache.remove(ResourceID.fromResource(resource));
+    public void cleanupForDeletion(CR resource) {
+        var prevJson = statusCache.remove(ResourceID.fromResource(resource));
+        var prevStatus = convertPreviousStatus(resource, prevJson);
         metricManager.onRemove(resource);
+        statusUpdateListener.accept(resource, prevStatus);
     }
 
     public static <S extends CommonStatus<?>, CR extends AbstractFlinkResource<?, S>>
@@ -289,6 +299,25 @@ public class StatusRecorder<CR extends CustomResource<?, STATUS>, STATUS> {
                                 }
                             });
                     AuditUtils.logContext(ctx);
+                };
+
+        return new StatusRecorder<>(metricManager, consumer);
+    }
+
+    public static StatusRecorder<FlinkBlueGreenDeployment, FlinkBlueGreenDeploymentStatus>
+            createForFlinkBlueGreenDeployment(
+                    KubernetesClient kubernetesClient,
+                    MetricManager<FlinkBlueGreenDeployment> metricManager,
+                    Collection<FlinkResourceListener> listeners) {
+        BiConsumer<FlinkBlueGreenDeployment, FlinkBlueGreenDeploymentStatus> consumer =
+                (resource, previousStatus) -> {
+                    listeners.forEach(
+                            listener -> {
+                                // FlinkResourceListener doesn't have a specific method for
+                                // BlueGreen deployments yet, so we skip listener notifications
+                                // for now. Metrics will still be tracked via MetricManager.
+                            });
+                    // No audit logging for BlueGreen deployments yet
                 };
 
         return new StatusRecorder<>(metricManager, consumer);

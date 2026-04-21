@@ -17,6 +17,7 @@
 
 package org.apache.flink.autoscaler.config;
 
+import org.apache.flink.autoscaler.JobVertexScaler;
 import org.apache.flink.autoscaler.metrics.MetricAggregator;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.ConfigOptions;
@@ -88,13 +89,17 @@ public class AutoScalerOptions {
                                     + "seconds suffix, daily expression's formation is startTime-endTime, such as 9:30:30-10:50:20, when exclude from 9:30:30-10:50:20 in Monday and Thursday "
                                     + "we can express it as 9:30:30-10:50:20 && * * * ? * 2,5");
 
-    public static final ConfigOption<Double> TARGET_UTILIZATION =
-            autoScalerConfig("target.utilization")
+    public static final ConfigOption<Double> UTILIZATION_TARGET =
+            autoScalerConfig("utilization.target")
                     .doubleType()
                     .defaultValue(0.7)
-                    .withFallbackKeys(oldOperatorConfigKey("target.utilization"))
+                    .withDeprecatedKeys(autoScalerConfigKey("target.utilization"))
+                    .withFallbackKeys(
+                            oldOperatorConfigKey("utilization.target"),
+                            oldOperatorConfigKey("target.utilization"))
                     .withDescription("Target vertex utilization");
 
+    @Deprecated
     public static final ConfigOption<Double> TARGET_UTILIZATION_BOUNDARY =
             autoScalerConfig("target.utilization.boundary")
                     .doubleType()
@@ -102,6 +107,20 @@ public class AutoScalerOptions {
                     .withFallbackKeys(oldOperatorConfigKey("target.utilization.boundary"))
                     .withDescription(
                             "Target vertex utilization boundary. Scaling won't be performed if the processing capacity is within [target_rate / (target_utilization - boundary), (target_rate / (target_utilization + boundary)]");
+
+    public static final ConfigOption<Double> UTILIZATION_MAX =
+            autoScalerConfig("utilization.max")
+                    .doubleType()
+                    .noDefaultValue()
+                    .withFallbackKeys(oldOperatorConfigKey("utilization.max"))
+                    .withDescription("Max vertex utilization");
+
+    public static final ConfigOption<Double> UTILIZATION_MIN =
+            autoScalerConfig("utilization.min")
+                    .doubleType()
+                    .noDefaultValue()
+                    .withFallbackKeys(oldOperatorConfigKey("utilization.min"))
+                    .withDescription("Min vertex utilization");
 
     public static final ConfigOption<Duration> SCALE_DOWN_INTERVAL =
             autoScalerConfig("scale-down.interval")
@@ -359,4 +378,52 @@ public class AutoScalerOptions {
                     .withFallbackKeys(oldOperatorConfigKey("quota.cpu"))
                     .withDescription(
                             "Quota of the CPU count. When scaling would go beyond this number the the scaling is not going to happen.");
+
+    public static final ConfigOption<JobVertexScaler.KeyGroupOrPartitionsAdjustMode>
+            SCALING_KEY_GROUP_PARTITIONS_ADJUST_MODE =
+                    autoScalerConfig("scaling.key-group.partitions.adjust.mode")
+                            .enumType(JobVertexScaler.KeyGroupOrPartitionsAdjustMode.class)
+                            .defaultValue(
+                                    JobVertexScaler.KeyGroupOrPartitionsAdjustMode.EVENLY_SPREAD)
+                            .withFallbackKeys(
+                                    oldOperatorConfigKey(
+                                            "scaling.key-group.partitions.adjust.mode"))
+                            .withDescription(
+                                    "How to adjust the parallelism of Source vertex or upstream shuffle is keyBy");
+
+    public static final ConfigOption<Boolean> OBSERVED_SCALABILITY_ENABLED =
+            autoScalerConfig("observed-scalability.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withFallbackKeys(oldOperatorConfigKey("observed-scalability.enabled"))
+                    .withDescription(
+                            "Enables the use of an observed scalability coefficient when computing target parallelism. "
+                                    + "If enabled, the system will estimate the scalability coefficient based on historical scaling data "
+                                    + "instead of assuming perfect linear scaling. "
+                                    + "This helps account for real-world inefficiencies such as network overhead and coordination costs.");
+
+    public static final ConfigOption<Integer> OBSERVED_SCALABILITY_MIN_OBSERVATIONS =
+            autoScalerConfig("observed-scalability.min-observations")
+                    .intType()
+                    .defaultValue(3)
+                    .withFallbackKeys(oldOperatorConfigKey("observed-scalability.min-observations"))
+                    .withDescription(
+                            "Defines the minimum number of historical scaling observations required to estimate the scalability coefficient. "
+                                    + "If the number of available observations is below this threshold, the system falls back to assuming linear scaling. "
+                                    + "Note: To effectively use a higher minimum observation count, you need to increase "
+                                    + VERTEX_SCALING_HISTORY_COUNT.key()
+                                    + ". Avoid setting "
+                                    + VERTEX_SCALING_HISTORY_COUNT.key()
+                                    + " to a very high value, as the number of retained data points is limited by the size of the state store—"
+                                    + "particularly when using Kubernetes-based state store.");
+
+    public static final ConfigOption<Double> OBSERVED_SCALABILITY_COEFFICIENT_MIN =
+            autoScalerConfig("observed-scalability.coefficient-min")
+                    .doubleType()
+                    .defaultValue(0.5)
+                    .withFallbackKeys(oldOperatorConfigKey("observed-scalability.coefficient-min"))
+                    .withDescription(
+                            "Minimum allowed value for the observed scalability coefficient. "
+                                    + "Prevents aggressive scaling by clamping low coefficient estimates. "
+                                    + "If the estimated coefficient falls below this value, it is capped at the configured minimum.");
 }

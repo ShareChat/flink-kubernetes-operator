@@ -237,7 +237,7 @@ public class JdbcAutoScalerStateStore<KEY, Context extends JobAutoScalerContext<
         try {
             return deserializeDelayedScaleDown(delayedScaleDown.get());
         } catch (JacksonException e) {
-            LOG.error(
+            LOG.warn(
                     "Could not deserialize delayed scale down, possibly the format changed. Discarding...",
                     e);
             jdbcStateStore.removeSerializedState(getSerializeKey(jobContext), DELAYED_SCALE_DOWN);
@@ -247,17 +247,13 @@ public class JdbcAutoScalerStateStore<KEY, Context extends JobAutoScalerContext<
 
     @Override
     public void clearAll(Context jobContext) {
-        jdbcStateStore.clearAll(getSerializeKey(jobContext));
+        var serializedKey = getSerializeKey(jobContext);
+        jdbcStateStore.clearAll(serializedKey);
     }
 
     @Override
     public void flush(Context jobContext) throws Exception {
         jdbcStateStore.flush(getSerializeKey(jobContext));
-    }
-
-    @Override
-    public void removeInfoFromCache(KEY jobKey) {
-        jdbcStateStore.removeInfoFromCache(getSerializeKey(jobKey));
     }
 
     private String getSerializeKey(Context jobContext) {
@@ -330,13 +326,16 @@ public class JdbcAutoScalerStateStore<KEY, Context extends JobAutoScalerContext<
 
     private static String serializeDelayedScaleDown(DelayedScaleDown delayedScaleDown)
             throws JacksonException {
-        return YAML_MAPPER.writeValueAsString(delayedScaleDown.getFirstTriggerTime());
+        return YAML_MAPPER.writeValueAsString(delayedScaleDown);
     }
 
     private static DelayedScaleDown deserializeDelayedScaleDown(String delayedScaleDown)
             throws JacksonException {
-        Map<JobVertexID, Instant> firstTriggerTime =
-                YAML_MAPPER.readValue(delayedScaleDown, new TypeReference<>() {});
-        return new DelayedScaleDown(firstTriggerTime);
+        return YAML_MAPPER.readValue(delayedScaleDown, new TypeReference<>() {});
+    }
+
+    @Override
+    public void close() throws Exception {
+        jdbcStateStore.close();
     }
 }

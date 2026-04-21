@@ -18,6 +18,7 @@
 package org.apache.flink.kubernetes.operator.reconciler.sessionjob;
 
 import org.apache.flink.api.common.JobID;
+import org.apache.flink.api.common.JobStatus;
 import org.apache.flink.autoscaler.JobAutoScaler;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.kubernetes.operator.api.FlinkDeployment;
@@ -41,6 +42,7 @@ import io.javaoperatorsdk.operator.processing.event.ResourceID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Instant;
 import java.util.Optional;
 
 /** The reconciler for the {@link FlinkSessionJob}. */
@@ -80,10 +82,22 @@ public class SessionJobReconciler
                 MSG_SUBMIT,
                 ctx.getKubernetesClient());
 
-        // Generate job id and record in status for durability
-        var jobId = JobID.generate();
-        ctx.getResource().getStatus().getJobStatus().setJobId(jobId.toHexString());
-        statusRecorder.patchAndCacheStatus(ctx.getResource(), ctx.getKubernetesClient());
+        var jobStatus = ctx.getResource().getStatus().getJobStatus();
+
+        String existingJobIdStr = jobStatus.getJobId();
+        JobID jobId;
+        var jobState = jobStatus.getState();
+        var reuseJobId = jobState == JobStatus.RECONCILING;
+        if (existingJobIdStr != null && reuseJobId) {
+            jobId = JobID.fromHexString(existingJobIdStr);
+            LOG.info("Reusing existing job ID {} for deployment retry", jobId);
+        } else {
+            jobId = JobID.generate();
+            LOG.info("Generated new job ID {} for deployment", jobId);
+            jobStatus.setJobId(jobId.toHexString());
+            jobStatus.setState(org.apache.flink.api.common.JobStatus.RECONCILING);
+            statusRecorder.patchAndCacheStatus(ctx.getResource(), ctx.getKubernetesClient());
+        }
 
         ctx.getFlinkService()
                 .submitJobToSessionCluster(
@@ -92,18 +106,17 @@ public class SessionJobReconciler
                         jobId,
                         deployConfig,
                         savepoint.orElse(null));
-
-        var status = ctx.getResource().getStatus();
-        status.getJobStatus().setState(org.apache.flink.api.common.JobStatus.RECONCILING);
     }
 
     @Override
     protected boolean cancelJob(FlinkResourceContext<FlinkSessionJob> ctx, SuspendMode suspendMode)
             throws Exception {
+        var cancelTs = Instant.now();
         var result =
                 ctx.getFlinkService()
                         .cancelSessionJob(ctx.getResource(), suspendMode, ctx.getObserveConfig());
-        result.getSavepointPath().ifPresent(location -> setUpgradeSavepointPath(ctx, location));
+        result.getSavepointPath()
+                .ifPresent(location -> setUpgradeSavepointPath(ctx, location, cancelTs));
         return result.isPending();
     }
 

@@ -56,6 +56,10 @@ To override single parameters you can use `--set`, for example:
 ```
 helm install --set image.repository=apache/flink-kubernetes-operator --set image.tag={{< stable >}}{{< version >}}{{< /stable >}}{{< unstable >}}latest{{< /unstable >}} flink-kubernetes-operator helm/flink-kubernetes-operator
 ```
+Note, you should escape special characters in your `--set` lines, for example:
+```
+helm install --set defaultConfiguration."log4j-operator\.properties"=rootLogger.level\=DEBUG flink-kubernetes-operator helm/flink-kubernetes-operator
+```
 
 You can also provide your custom values file by using the `-f` flag:
 ```
@@ -131,7 +135,7 @@ __Notice__: The pod resources should be set as your workload in different enviro
 
 In order to use the webhooks in the operator, you must install the cert-manager on the Kubernetes cluster:
 ```
-kubectl apply -f https://github.com/jetstack/cert-manager/releases/download/v1.8.2/cert-manager.yaml
+kubectl apply -f https://github.com/jetstack/cert-manager/releases/download/v1.18.2/cert-manager.yaml
 ```
 
 The webhooks can be disabled during helm install by passing the `--set webhook.create=false` parameter or editing the `values.yaml` directly.

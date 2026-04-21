@@ -63,7 +63,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Stream;
 
 import static org.apache.flink.configuration.DeploymentOptions.SHUTDOWN_ON_APPLICATION_FINISH;
 import static org.apache.flink.kubernetes.operator.api.utils.BaseTestUtils.IMAGE;
@@ -127,7 +126,8 @@ public class FlinkConfigBuilderTest {
         FlinkDeployment deployment = ReconciliationUtils.clone(flinkDeployment);
         deployment
                 .getSpec()
-                .setFlinkConfiguration(
+                .getFlinkConfiguration()
+                .putAllFrom(
                         Map.of(
                                 KubernetesConfigOptions.REST_SERVICE_EXPOSED_TYPE.key(),
                                 KubernetesConfigOptions.ServiceExposedType.LoadBalancer.name()));
@@ -875,6 +875,38 @@ public class FlinkConfigBuilderTest {
     }
 
     @Test
+    public void testParallelismOverridesOnlyAppliedForStandaloneMode()
+            throws URISyntaxException, IOException {
+        FlinkDeployment dep = ReconciliationUtils.clone(flinkDeployment);
+        dep.getSpec().setTaskManager(new TaskManagerSpec());
+        dep.getSpec().getJob().setParallelism(5);
+        dep.getSpec()
+                .getFlinkConfiguration()
+                .put(PipelineOptions.PARALLELISM_OVERRIDES.key(), "vertex1:10,vertex2:20");
+
+        // Test STANDALONE mode - parallelism overrides should be used
+        dep.getSpec().setMode(KubernetesDeploymentMode.STANDALONE);
+        Configuration configuration =
+                new FlinkConfigBuilder(dep, new Configuration())
+                        .applyFlinkConfiguration()
+                        .applyTaskManagerSpec()
+                        .applyJobOrSessionSpec()
+                        .build();
+        assertEquals(20, configuration.get(CoreOptions.DEFAULT_PARALLELISM));
+
+        // Test NATIVE mode - parallelism overrides should NOT be used, fall back to job
+        // parallelism
+        dep.getSpec().setMode(KubernetesDeploymentMode.NATIVE);
+        configuration =
+                new FlinkConfigBuilder(dep, new Configuration())
+                        .applyFlinkConfiguration()
+                        .applyTaskManagerSpec()
+                        .applyJobOrSessionSpec()
+                        .build();
+        assertEquals(5, configuration.get(CoreOptions.DEFAULT_PARALLELISM));
+    }
+
+    @Test
     public void testBuildFrom() throws Exception {
         final Configuration configuration =
                 FlinkConfigBuilder.buildFrom(
@@ -933,14 +965,5 @@ public class FlinkConfigBuilderTest {
         var pod =
                 TestUtils.getTestPodTemplate("hostname", List.of(mainContainer, sideCarContainer));
         return pod;
-    }
-
-    private static Stream<KubernetesConfigOptions.ServiceExposedType> serviceExposedTypes() {
-        return Stream.of(
-                null,
-                KubernetesConfigOptions.ServiceExposedType.ClusterIP,
-                KubernetesConfigOptions.ServiceExposedType.LoadBalancer,
-                KubernetesConfigOptions.ServiceExposedType.Headless_ClusterIP,
-                KubernetesConfigOptions.ServiceExposedType.NodePort);
     }
 }

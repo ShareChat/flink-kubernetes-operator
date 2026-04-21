@@ -25,8 +25,7 @@ import org.apache.flink.autoscaler.event.AutoScalerEventHandler;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.util.Preconditions;
 
-import org.apache.flink.shaded.guava31.com.google.common.util.concurrent.ThreadFactoryBuilder;
-
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 
@@ -135,11 +134,12 @@ public class JdbcAutoScalerEventHandler<KEY, Context extends JobAutoScalerContex
     }
 
     @Override
-    public void close() {
+    public void close() throws Exception {
         if (Objects.nonNull(scheduledEventHandlerCleaner)
                 && !scheduledEventHandlerCleaner.isShutdown()) {
             scheduledEventHandlerCleaner.shutdownNow();
         }
+        jdbcEventInteractor.close();
     }
 
     @VisibleForTesting
