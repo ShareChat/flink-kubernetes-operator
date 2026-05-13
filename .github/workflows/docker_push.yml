@@ -75,7 +75,11 @@ jobs:
           set -euo pipefail
 
           BAKE_FILE="$(mktemp)"
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY}"
+          # Docker image references must be lowercase. GITHUB_REPOSITORY
+          # preserves the original case (e.g. "ShareChat/...") which would
+          # produce an invalid tag on forks whose owner is not all-lowercase.
+          REPO_LOWER="${GITHUB_REPOSITORY,,}"
+          IMAGE="ghcr.io/${REPO_LOWER}"
           SHORT_SHA="${GITHUB_SHA::7}"
 
           TAGS=()
