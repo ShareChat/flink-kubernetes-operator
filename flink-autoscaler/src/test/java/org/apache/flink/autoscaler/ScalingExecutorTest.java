@@ -927,8 +927,9 @@ public class ScalingExecutorTest {
         conf.set(AutoScalerOptions.VERTEX_UNIFORM_PARALLELISM, true);
         // set scale down interval to zero so we consider scale downs immediately
         conf.set(AutoScalerOptions.SCALE_DOWN_INTERVAL, Duration.ZERO);
-        conf.set(AutoScalerOptions.TARGET_UTILIZATION, 1.d);
-        conf.set(AutoScalerOptions.TARGET_UTILIZATION_BOUNDARY, 0.);
+        conf.set(AutoScalerOptions.UTILIZATION_TARGET, 1.d);
+        conf.set(AutoScalerOptions.UTILIZATION_MIN, 1.0);
+        conf.set(AutoScalerOptions.UTILIZATION_MAX, 1.0);
 
         JobTopology jobTopology =
                 new JobTopology(
