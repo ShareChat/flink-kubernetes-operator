@@ -195,9 +195,9 @@ public class ScalingExecutor<KEY, Context extends JobAutoScalerContext<KEY>> {
 
         var excludeVertexIdList =
                 context.getConfiguration().get(AutoScalerOptions.VERTEX_EXCLUDE_IDS);
+        AtomicBoolean anyVertexOutsideBound = new AtomicBoolean(false);
         var uniformParallelism =
                 context.getConfiguration().get(AutoScalerOptions.VERTEX_UNIFORM_PARALLELISM);
-        AtomicBoolean anyVertexOutsideBound = new AtomicBoolean(false);
         evaluatedMetrics
                 .getVertexMetrics()
                 .forEach(

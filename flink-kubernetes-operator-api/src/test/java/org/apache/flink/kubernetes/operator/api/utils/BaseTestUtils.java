@@ -17,6 +17,7 @@
 
 package org.apache.flink.kubernetes.operator.api.utils;
 
+import org.apache.flink.api.common.JobStatus;
 import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.HighAvailabilityOptions;
 import org.apache.flink.configuration.TaskManagerOptions;
@@ -39,8 +40,10 @@ import org.apache.flink.kubernetes.operator.api.spec.SavepointSpec;
 import org.apache.flink.kubernetes.operator.api.spec.TaskManagerSpec;
 import org.apache.flink.kubernetes.operator.api.spec.UpgradeMode;
 import org.apache.flink.kubernetes.operator.api.status.CheckpointType;
+import org.apache.flink.kubernetes.operator.api.status.FlinkDeploymentReconciliationStatus;
 import org.apache.flink.kubernetes.operator.api.status.FlinkDeploymentStatus;
 import org.apache.flink.kubernetes.operator.api.status.FlinkSessionJobStatus;
+import org.apache.flink.kubernetes.operator.api.status.JobManagerDeploymentStatus;
 
 import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
@@ -49,6 +52,7 @@ import io.fabric8.kubernetes.api.model.PodSpec;
 import io.fabric8.kubernetes.api.model.PodTemplateSpec;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -63,6 +67,7 @@ public class BaseTestUtils {
     public static final String IMAGE = String.format("flink:%s", FLINK_VERSION);
     public static final String IMAGE_POLICY = "IfNotPresent";
     public static final String SAMPLE_JAR = "local:///tmp/sample.jar";
+    public static final String SAMPLE_SESSION_JOB_JAR = "https://example.com/sample.jar";
 
     public static FlinkDeployment buildSessionCluster() {
         return buildSessionCluster(FlinkVersion.v1_17);
@@ -150,7 +155,7 @@ public class BaseTestUtils {
                         .deploymentName(TEST_DEPLOYMENT_NAME)
                         .job(
                                 JobSpec.builder()
-                                        .jarURI(SAMPLE_JAR)
+                                        .jarURI(SAMPLE_SESSION_JOB_JAR)
                                         .parallelism(1)
                                         .upgradeMode(UpgradeMode.STATELESS)
                                         .state(jobState)
@@ -267,5 +272,44 @@ public class BaseTestUtils {
                         .build());
 
         return snapshot;
+    }
+
+    public static FlinkDeploymentStatus createApplicationModeStatus(JobStatus jobStatus) {
+        FlinkDeploymentStatus status = new FlinkDeploymentStatus();
+        org.apache.flink.kubernetes.operator.api.status.JobStatus flinkJobStatus =
+                new org.apache.flink.kubernetes.operator.api.status.JobStatus();
+        flinkJobStatus.setState(jobStatus);
+        status.setJobStatus(flinkJobStatus);
+        status.setConditions(new ArrayList<>());
+
+        FlinkDeploymentReconciliationStatus reconciliationStatus =
+                new FlinkDeploymentReconciliationStatus();
+
+        FlinkDeployment deployment = BaseTestUtils.buildApplicationCluster();
+        String serializedSpec = SpecUtils.writeSpecWithMeta(deployment.getSpec(), deployment);
+        reconciliationStatus.setLastReconciledSpec(serializedSpec);
+
+        status.setReconciliationStatus(reconciliationStatus);
+        status.setJobManagerDeploymentStatus(JobManagerDeploymentStatus.READY);
+
+        return status;
+    }
+
+    public static FlinkDeploymentStatus createSessionModeStatus(
+            JobManagerDeploymentStatus jmStatus) {
+        FlinkDeploymentStatus status = new FlinkDeploymentStatus();
+        status.setJobManagerDeploymentStatus(jmStatus);
+        status.setConditions(new ArrayList<>());
+
+        FlinkDeploymentReconciliationStatus reconciliationStatus =
+                new FlinkDeploymentReconciliationStatus();
+
+        FlinkDeployment deployment = BaseTestUtils.buildSessionCluster();
+        String serializedSpec = SpecUtils.writeSpecWithMeta(deployment.getSpec(), deployment);
+        reconciliationStatus.setLastReconciledSpec(serializedSpec);
+
+        status.setReconciliationStatus(reconciliationStatus);
+
+        return status;
     }
 }
